@@ -128,10 +128,28 @@ std::string EngineCore::FNameToString(FName fname)
 	//average function since 4.25
 	//https://github.com/EpicGames/UnrealEngine/blob/5.1/Engine/Source/Runtime/Core/Private/UObject/UnrealNames.cpp#L3375
 
+	// Debug: log the first 5 lookups to trace the issue
+	static int debugCount = 0;
+	const bool debugThis = (debugCount < 5);
+
 #if WITH_CASE_PRESERVING_NAME
 	uint64_t namePoolChunk = Memory::read<uint64_t>(gNames + 8 * (chunkOffset + 2)) + 4 * nameOffset;
 
+	if (debugThis)
+	{
+		uint64_t blockAddr = gNames + 8 * (chunkOffset + 2);
+		uint64_t blockPtr = Memory::read<uint64_t>(blockAddr);
+		printf("[FNAME DEBUG %d] CompIdx=0x%X chunk=%u nameOff=%u blockAddr=0x%llX blockPtr=0x%llX namePoolChunk=0x%llX\n",
+			debugCount, fname.ComparisonIndex, chunkOffset, nameOffset, blockAddr, blockPtr, namePoolChunk);
+	}
+
 	const auto nameLength = Memory::read<uint16_t>(namePoolChunk + 4) >> 1;
+
+	if (debugThis)
+	{
+		uint16_t rawHeader = Memory::read<uint16_t>(namePoolChunk + 4);
+		printf("[FNAME DEBUG %d] rawHeader=0x%04X nameLength=%d\n", debugCount, rawHeader, nameLength);
+	}
 
 	if (nameLength > NAME_SIZE)
 	{
@@ -150,7 +168,22 @@ std::string EngineCore::FNameToString(FName fname)
 #else
 	int64_t namePoolChunk = Memory::read<uint64_t>(gNames + 8 * (chunkOffset + 2)) + 2 * nameOffset;
 
+	if (debugThis)
+	{
+		uint64_t blockAddr = gNames + 8 * (chunkOffset + 2);
+		uint64_t blockPtr = Memory::read<uint64_t>(blockAddr);
+		printf("[FNAME DEBUG %d] CompIdx=0x%X chunk=%u nameOff=%u blockAddr=0x%llX blockPtr=0x%llX namePoolChunk=0x%llX\n",
+			debugCount, fname.ComparisonIndex, chunkOffset, nameOffset, blockAddr, blockPtr, namePoolChunk);
+	}
+
 	const auto nameLength = Memory::read<uint16_t>(namePoolChunk) >> 6;
+
+	if (debugThis)
+	{
+		uint16_t rawHeader = Memory::read<uint16_t>(namePoolChunk);
+		printf("[FNAME DEBUG %d] rawHeader=0x%04X nameLength=%d\n", debugCount, rawHeader, nameLength);
+		debugCount++;
+	}
 
 	if (nameLength > NAME_SIZE)
 	{
@@ -863,6 +896,26 @@ EngineCore::EngineCore()
 
 		gNames = getOffsetAddress(getOffsetForName("OFFSET_GNAMES"));
 		windows::LogWindow::Log(windows::LogWindow::logLevels::LOGLEVEL_INFO, "ENGINECORE", "GNames -> 0x%p", gNames);
+		
+		// Debug: hex dump first 48 bytes at gNames to diagnose layout
+		{
+			uint8_t gnamesDump[48] = { 0 };
+			Memory::read(reinterpret_cast<void*>(gNames), gnamesDump, sizeof(gnamesDump));
+			printf("[GNAMES DUMP] Address: 0x%llX\n", gNames);
+			printf("[GNAMES DUMP] ");
+			for (int di = 0; di < 48; di++) {
+				printf("%02X ", gnamesDump[di]);
+				if ((di + 1) % 16 == 0) printf("\n[GNAMES DUMP] ");
+			}
+			printf("\n");
+			// Also try reading as pointers at offset 0x10, 0x18
+			uint64_t ptr0 = Memory::read<uint64_t>(gNames + 0x00);
+			uint64_t ptr8 = Memory::read<uint64_t>(gNames + 0x08);
+			uint64_t ptr10 = Memory::read<uint64_t>(gNames + 0x10);
+			uint64_t ptr18 = Memory::read<uint64_t>(gNames + 0x18);
+			printf("[GNAMES PTRS] +0x00=0x%llX +0x08=0x%llX +0x10=0x%llX +0x18=0x%llX\n", ptr0, ptr8, ptr10, ptr18);
+		}
+
 		if (!gNames)
 		{
 			windows::LogWindow::Log(windows::LogWindow::logLevels::LOGLEVEL_ERROR, "ENGINECORE", "GNames offset not found!");
@@ -877,6 +930,15 @@ EngineCore::EngineCore()
 		if (!gNames)
 		{
 			windows::LogWindow::Log(windows::LogWindow::logLevels::LOGLEVEL_ERROR, "ENGINECORE", "GNames offset seems zero!");
+			return;
+		}
+#elif GNAMES_IS_POINTER
+		//some UE >= 4.25 games also store gNames as a pointer to a heap-allocated FNamePool
+		gNames = Memory::read<uint64_t>(gNames);
+		windows::LogWindow::Log(windows::LogWindow::logLevels::LOGLEVEL_INFO, "ENGINECORE", "GNames (dereferenced) -> 0x%p", gNames);
+		if (!gNames)
+		{
+			windows::LogWindow::Log(windows::LogWindow::logLevels::LOGLEVEL_ERROR, "ENGINECORE", "GNames pointer seems null! Check your OFFSET_GNAMES or disable GNAMES_IS_POINTER.");
 			return;
 		}
 #endif

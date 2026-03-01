@@ -40,8 +40,8 @@ bool windows::HelloWindow::render()
 	}
 
 
-	static char processName[100] = { 0 };
-	static char projectName[50] = { 0 };
+	static char processName[100] = "RGame-Win64-Shipping.exe";
+	static char projectName[50] = "abyssus";
 	static char errorText[100] = { 0 };
 	static bool showEngineInfos = false;
 	static bool createdDir = false;

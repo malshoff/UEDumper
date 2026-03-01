@@ -148,6 +148,28 @@ void windows::LogWindow::render()
 				selectedLog = i;
 			}
 			
+			// Right-click context menu: copy this line or all visible lines
+			if (ImGui::BeginPopupContextItem())
+			{
+				if (ImGui::MenuItem("Copy Line"))
+				{
+					std::string line = std::to_string(i) + " " + log.originandTime + " " + log.message;
+					IGHelper::copyToClipBoard(line);
+				}
+				if (ImGui::MenuItem("Copy All Visible"))
+				{
+					std::string allLines;
+					logMutex.lock();
+					for (int j = selectedLogRange; j < logSize && j < selectedLogRange + logRange; j++)
+					{
+						allLines += std::to_string(j) + " " + _logs[j].originandTime + " " + _logs[j].message + "\n";
+					}
+					logMutex.unlock();
+					IGHelper::copyToClipBoard(allLines);
+				}
+				ImGui::EndPopup();
+			}
+
 			if (is_selected && ImGui::IsItemHovered()) {
 				ImGui::BeginTooltip();
 				ImGui::Text("%s", log.message);
