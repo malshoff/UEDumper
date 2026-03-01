@@ -74,10 +74,50 @@ static int             g_targetPID = 0;
 HANDLE procHandle = nullptr;
 
 // ---------------------------------------------------------------------------
-// Wait for the driver to finish processing a command
+// 4KB read cache — batches small reads into one driver round-trip.
+// Sequential struct traversal (reading 4-8 byte fields back-to-back)
+// becomes ~500-1000x fewer driver calls.
+// ---------------------------------------------------------------------------
+static constexpr DWORD64 READ_CACHE_SIZE = 0x1000; // 4KB page
+
+struct ReadCache
+{
+    uint64_t baseAddr = 0;          // VA of the cached page start
+    uint8_t  data[READ_CACHE_SIZE]; // cached page data
+    bool     valid = false;         // whether the cache is populated
+
+    void invalidate() { valid = false; baseAddr = 0; }
+};
+
+static ReadCache g_readCache;
+
+// ---------------------------------------------------------------------------
+// Wait for the driver to finish processing a command.
+//
+// Tiered approach to minimize latency:
+//   Phase 1: spin-wait ~100μs  (catches fast driver responses)
+//   Phase 2: SwitchToThread()  (yields to other ready threads)
+//   Phase 3: Sleep(1)          (fallback for slow responses)
 // ---------------------------------------------------------------------------
 static bool WaitForDriverCommand(int timeoutMs = 5000)
 {
+    // Phase 1: spin for ~100μs (typically ~200-400 iterations at ~0.3μs each)
+    for (int spin = 0; spin < 400; spin++)
+    {
+        if (InterlockedCompareExchange(&g_shm->CmdState, KMDF_CMD_DONE, KMDF_CMD_DONE) == KMDF_CMD_DONE)
+            return true;
+        YieldProcessor(); // _mm_pause — reduces power and gives HT sibling more resources
+    }
+
+    // Phase 2: yield time slice ~20 times (~200μs total)
+    for (int yield = 0; yield < 20; yield++)
+    {
+        if (InterlockedCompareExchange(&g_shm->CmdState, KMDF_CMD_DONE, KMDF_CMD_DONE) == KMDF_CMD_DONE)
+            return true;
+        SwitchToThread();
+    }
+
+    // Phase 3: fall back to Sleep(1) for the remainder
     for (int i = 0; i < timeoutMs; i++)
     {
         if (InterlockedCompareExchange(&g_shm->CmdState, KMDF_CMD_DONE, KMDF_CMD_DONE) == KMDF_CMD_DONE)
@@ -140,21 +180,12 @@ inline void loadData(std::string& processName, uint64_t& baseAddress, int& proce
     attachToProcess(processID);
 }
 
-/**
- * \brief read function — reads via KMDF kernel driver shared memory
- * \param address memory address to read from (in target process VA space)
- * \param buffer memory address to write to (local buffer)
- * \param size size of memory to read
- */
-inline void _read(const void* address, void* buffer, const DWORD64 size)
+// ---------------------------------------------------------------------------
+// Raw driver read — issues a single KMDF_OP_READ command.
+// Used by the cached _read and for large reads that bypass cache.
+// ---------------------------------------------------------------------------
+static bool DriverReadRaw(uint64_t addr, void* buffer, DWORD64 size)
 {
-    if (!g_shm || !address || !buffer || size == 0)
-    {
-        memset(buffer, 0, size);
-        return;
-    }
-
-    const auto addr = reinterpret_cast<unsigned long long>(address);
     unsigned long long offset = 0;
 
     while (offset < size)
@@ -173,9 +204,8 @@ inline void _read(const void* address, void* buffer, const DWORD64 size)
 
         if (!WaitForDriverCommand(10000) || g_shm->Result != KMDF_OK || g_shm->DumpChunkSize <= 0)
         {
-            // Read failed — zero fill the rest
             memset(static_cast<uint8_t*>(buffer) + offset, 0, size - offset);
-            return;
+            return false;
         }
 
         int chunkRead = g_shm->DumpChunkSize;
@@ -185,6 +215,66 @@ inline void _read(const void* address, void* buffer, const DWORD64 size)
         memcpy(static_cast<uint8_t*>(buffer) + offset, g_shm->DllData, chunkRead);
         offset += chunkRead;
     }
+    return true;
+}
+
+/**
+ * \brief read function — reads via KMDF kernel driver shared memory
+ *
+ * For small reads (≤ 4KB), uses a page-aligned cache so that sequential
+ * struct field reads (4-8 bytes each) only issue one driver round-trip
+ * per 4KB page instead of one per field.
+ *
+ * \param address memory address to read from (in target process VA space)
+ * \param buffer memory address to write to (local buffer)
+ * \param size size of memory to read
+ */
+inline void _read(const void* address, void* buffer, const DWORD64 size)
+{
+    if (!g_shm || !address || !buffer || size == 0)
+    {
+        memset(buffer, 0, size);
+        return;
+    }
+
+    const auto addr = reinterpret_cast<uint64_t>(address);
+
+    // Small reads: serve from the 4KB page cache
+    if (size <= READ_CACHE_SIZE)
+    {
+        const uint64_t pageBase = addr & ~(READ_CACHE_SIZE - 1); // align down to 4KB
+        const uint64_t pageEnd  = pageBase + READ_CACHE_SIZE;
+
+        // Check if the entire read fits within the cached page
+        if (g_readCache.valid && g_readCache.baseAddr == pageBase && (addr + size) <= pageEnd)
+        {
+            memcpy(buffer, g_readCache.data + (addr - pageBase), size);
+            return;
+        }
+
+        // Cache miss — fetch the whole 4KB page
+        if ((addr + size) <= pageEnd)
+        {
+            if (DriverReadRaw(pageBase, g_readCache.data, READ_CACHE_SIZE))
+            {
+                g_readCache.baseAddr = pageBase;
+                g_readCache.valid = true;
+                memcpy(buffer, g_readCache.data + (addr - pageBase), size);
+                return;
+            }
+            else
+            {
+                g_readCache.invalidate();
+                memset(buffer, 0, size);
+                return;
+            }
+        }
+        // Read spans two pages — fall through to raw read
+    }
+
+    // Large reads or cross-page reads: bypass cache, issue directly
+    g_readCache.invalidate();
+    DriverReadRaw(addr, buffer, size);
 }
 
 
