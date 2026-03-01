@@ -61,12 +61,23 @@
 #define UE_5_01		10
 #define UE_5_02		11
 #define UE_5_03		12
+#define UE_5_04		13
+#define UE_5_05		14
+#define UE_5_06		15
+#define UE_5_07		16
 
 
 /* UE version settings */
 
 //set your games ue version
-#define UE_VERSION UE_4_27
+#define UE_VERSION UE_5_06
+
+
+/* Memory reading mode */
+
+//set to TRUE to use the KMDF kernel driver for memory reads (bypasses anticheat, slower)
+//set to FALSE to use ReadProcessMemory (fast, but blocked by anticheat)
+#define USE_KERNEL_DRIVER TRUE
 
 
 /* SDK and MDK generation */
