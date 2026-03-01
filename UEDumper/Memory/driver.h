@@ -6,10 +6,17 @@
 #include <tlhelp32.h>
 
 /*
- * KMDF Driver Backend for UEDumper
+ * Memory Backend for UEDumper
  *
- * Reads memory from the target process via a kernel driver using shared memory.
- * The driver exposes KMDF_OP_READ through a named section "Global\\KmdfSvc".
+ * Set USE_KERNEL_DRIVER in UEdefinitions.h:
+ *   TRUE  = KMDF kernel driver (bypasses anticheat, slower)
+ *   FALSE = ReadProcessMemory  (fast, no anticheat bypass)
+ */
+
+#if USE_KERNEL_DRIVER
+
+/*
+ * KMDF Driver Backend
  *
  * Protocol:
  *   1. Write ReadAddress, ReadTotalSize, TargetPID, OpType=KMDF_OP_READ
@@ -255,3 +262,92 @@ void attachToProcess(const int& pid)
     // Also open a handle for any code that still uses procHandle directly
     procHandle = OpenProcess(PROCESS_ALL_ACCESS, 0, pid);
 }
+
+
+#else // !USE_KERNEL_DRIVER — ReadProcessMemory mode
+
+
+//global variables here
+HANDLE procHandle = nullptr;
+
+//in case you need to initialize anything BEFORE your com works, you can do this in here.
+inline void init()
+{
+    //...
+}
+
+uint64_t _getBaseAddress(const wchar_t* processName, int& pid);
+
+void attachToProcess(const int& pid);
+
+inline void loadData(std::string& processName, uint64_t& baseAddress, int& processID)
+{
+    const auto name = std::wstring(processName.begin(), processName.end());
+    baseAddress = _getBaseAddress(name.c_str(), processID);
+    attachToProcess(processID);
+}
+
+inline void _read(const void* address, void* buffer, const DWORD64 size)
+{
+    size_t bytes_read = 0;
+    BOOL b = ReadProcessMemory(procHandle, address, buffer, size, &bytes_read);
+    if (!b)
+    {
+        for (int i = 1; i < size && !b; i += 10)
+        {
+            b = ReadProcessMemory(procHandle, address, buffer, size - i, nullptr);
+        }
+    }
+}
+
+inline void _write(void* address, const void* buffer, const DWORD64 size)
+{
+    WriteProcessMemory(procHandle, address, buffer, size, nullptr);
+}
+
+uint64_t _getBaseAddress(const wchar_t* processName, int& pid)
+{
+    uint64_t baseAddress = 0;
+
+    if (!pid)
+    {
+        const HANDLE hProcess = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (hProcess == INVALID_HANDLE_VALUE) {
+            return false;
+        }
+
+        PROCESSENTRY32 pe32 = { sizeof(PROCESSENTRY32) };
+        if (!Process32First(hProcess, &pe32)) {
+            CloseHandle(hProcess);
+            return false;
+        }
+        while (Process32Next(hProcess, &pe32)) {
+            if (wcscmp(pe32.szExeFile, processName) == 0) {
+                pid = pe32.th32ProcessID;
+                break;
+            }
+        }
+
+        CloseHandle(hProcess);
+    }
+
+    if (pid != 0) {
+        const HANDLE hModule = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+        if (hModule != INVALID_HANDLE_VALUE) {
+            MODULEENTRY32 me32 = { sizeof(MODULEENTRY32) };
+            if (Module32First(hModule, &me32)) {
+                baseAddress = reinterpret_cast<DWORD64>(me32.modBaseAddr);
+            }
+            CloseHandle(hModule);
+        }
+    }
+
+    return baseAddress;
+}
+
+void attachToProcess(const int& pid)
+{
+    procHandle = OpenProcess(PROCESS_ALL_ACCESS, 0, pid);
+}
+
+#endif // USE_KERNEL_DRIVER
