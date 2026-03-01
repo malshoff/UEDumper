@@ -100,7 +100,7 @@
 //rather than having the FNamePool directly at base + offset.
 //IDA analysis: if the gNames offset holds a qword pointer (not the pool struct itself), enable this.
 //default FALSE
-#define GNAMES_IS_POINTER TRUE
+#define GNAMES_IS_POINTER FALSE
 
 //set this to false if your generation always stops and says you have a invalid fname offset
 //however all this does is check if the first item is /Scrupt/Core.UObject which should always be the case

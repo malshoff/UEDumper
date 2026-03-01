@@ -896,25 +896,6 @@ EngineCore::EngineCore()
 
 		gNames = getOffsetAddress(getOffsetForName("OFFSET_GNAMES"));
 		windows::LogWindow::Log(windows::LogWindow::logLevels::LOGLEVEL_INFO, "ENGINECORE", "GNames -> 0x%p", gNames);
-		
-		// Debug: hex dump first 48 bytes at gNames to diagnose layout
-		{
-			uint8_t gnamesDump[48] = { 0 };
-			Memory::read(reinterpret_cast<void*>(gNames), gnamesDump, sizeof(gnamesDump));
-			printf("[GNAMES DUMP] Address: 0x%llX\n", gNames);
-			printf("[GNAMES DUMP] ");
-			for (int di = 0; di < 48; di++) {
-				printf("%02X ", gnamesDump[di]);
-				if ((di + 1) % 16 == 0) printf("\n[GNAMES DUMP] ");
-			}
-			printf("\n");
-			// Also try reading as pointers at offset 0x10, 0x18
-			uint64_t ptr0 = Memory::read<uint64_t>(gNames + 0x00);
-			uint64_t ptr8 = Memory::read<uint64_t>(gNames + 0x08);
-			uint64_t ptr10 = Memory::read<uint64_t>(gNames + 0x10);
-			uint64_t ptr18 = Memory::read<uint64_t>(gNames + 0x18);
-			printf("[GNAMES PTRS] +0x00=0x%llX +0x08=0x%llX +0x10=0x%llX +0x18=0x%llX\n", ptr0, ptr8, ptr10, ptr18);
-		}
 
 		if (!gNames)
 		{
@@ -943,7 +924,26 @@ EngineCore::EngineCore()
 		}
 #endif
 
-
+		// Debug: scan 512 bytes at gNames for heap-like pointers (FNameEntryAllocator Blocks[])
+		{
+			uint8_t gnamesDump[512] = { 0 };
+			Memory::read(reinterpret_cast<void*>(gNames), gnamesDump, sizeof(gnamesDump));
+			printf("[GNAMES POOL] Address: 0x%llX (no dereference)\n", gNames);
+			// Print first 64 bytes hex
+			for (int row = 0; row < 4; row++) {
+				printf("[GNAMES POOL] +0x%02X: ", row * 16);
+				for (int col = 0; col < 16; col++)
+					printf("%02X ", gnamesDump[row * 16 + col]);
+				printf("\n");
+			}
+			// Scan ALL 512 bytes for heap pointers (0x100xxxxxxxx to 0x7FFxxxxxxxx range)
+			printf("[GNAMES POOL] Scanning 512 bytes for heap pointers:\n");
+			for (int off = 0; off < 512; off += 8) {
+				uint64_t val = *(uint64_t*)(gnamesDump + off);
+				if (val > 0x100000000ULL && val < 0x7FFFFFFFFFFFULL)
+					printf("[GNAMES POOL]   +0x%03X = 0x%llX\n", off, val);
+			}
+		}
 
 		loaded = true;
 	}
