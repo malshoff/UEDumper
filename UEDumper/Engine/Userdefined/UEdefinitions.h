@@ -61,12 +61,23 @@
 #define UE_5_01		10
 #define UE_5_02		11
 #define UE_5_03		12
+#define UE_5_04		13
+#define UE_5_05		14
+#define UE_5_06		15
+#define UE_5_07		16
 
 
 /* UE version settings */
 
 //set your games ue version
-#define UE_VERSION UE_4_27
+#define UE_VERSION UE_5_06
+
+
+/* Memory reading mode */
+
+//set to TRUE to use the KMDF kernel driver for memory reads (bypasses anticheat, slower)
+//set to FALSE to use ReadProcessMemory (fast, but blocked by anticheat)
+#define USE_KERNEL_DRIVER TRUE
 
 
 /* SDK and MDK generation */
@@ -84,6 +95,12 @@
 //if GNames fail, try setting this to true
 //default FALSE
 #define WITH_CASE_PRESERVING_NAME FALSE
+
+//set this to TRUE if your game stores gNames as a pointer to a heap-allocated FNamePool
+//rather than having the FNamePool directly at base + offset.
+//IDA analysis: if the gNames offset holds a qword pointer (not the pool struct itself), enable this.
+//default FALSE
+#define GNAMES_IS_POINTER FALSE
 
 //set this to false if your generation always stops and says you have a invalid fname offset
 //however all this does is check if the first item is /Scrupt/Core.UObject which should always be the case

@@ -220,7 +220,13 @@ public:
 	int32_t		PropertiesSize;
 
 	/** Alignment of structure in memory, structure will be at least this large */
+#if UE_VERSION >= UE_5_06
+	int16_t		MinAlignment;
+	/** State flags -- internal to UStruct */
+	uint16_t	StructStateFlags;
+#else
 	int32_t		MinAlignment;
+#endif
 
 	/** Script byte code associated with this object */
 	TArray<uint8_t> Script;
